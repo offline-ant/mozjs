@@ -61,6 +61,40 @@ endif
 
 ifneq ($(HOST),$(TARGET))
 
+	CONFIGURE_TARGET ?= $(TARGET)
+
+	# Rust iOS targets do not map to <triple>-gcc binaries.
+	# Use clang toolchain directly and normalize configure target where needed.
+	ifeq (aarch64-apple-ios-sim,$(TARGET))
+		CONFIGURE_TARGET = aarch64-apple-ios
+		CC ?= clang
+		CPP ?= clang -E
+		CXX ?= clang++
+		AR ?= ar
+		CFLAGS += --target=aarch64-apple-ios-sim
+		CXXFLAGS += --target=aarch64-apple-ios-sim
+	endif
+
+	ifeq (x86_64-apple-ios,$(TARGET))
+		CONFIGURE_TARGET = x86_64-apple-ios
+		CC ?= clang
+		CPP ?= clang -E
+		CXX ?= clang++
+		AR ?= ar
+		CFLAGS += --target=x86_64-apple-ios-simulator
+		CXXFLAGS += --target=x86_64-apple-ios-simulator
+	endif
+
+	ifeq (aarch64-apple-ios,$(TARGET))
+		CONFIGURE_TARGET = aarch64-apple-ios
+		CC ?= clang
+		CPP ?= clang -E
+		CXX ?= clang++
+		AR ?= ar
+		CFLAGS += --target=aarch64-apple-ios
+		CXXFLAGS += --target=aarch64-apple-ios
+	endif
+
 	ifeq (armv7-linux-androideabi,$(TARGET))
 		# Reset TARGET variable because armv7 target name used by Rust is not
 		# the same as the target name needed for the CXX toolchain.
@@ -128,7 +162,7 @@ ifneq ($(HOST),$(TARGET))
 		CPP ?= $(TARGET)-gcc -E
 		CXX ?= $(TARGET)-g++
 		AR ?= $(TARGET)-ar
-		CONFIGURE_FLAGS += --target=$(TARGET)
+		CONFIGURE_FLAGS += --target=$(CONFIGURE_TARGET)
 	endif
 
 else
@@ -190,7 +224,7 @@ all: maybe-configure
 JSSRC := '$(SRC_DIR)'/js/src
 # Keep track of all input variables to configure, so we don't skip reconfigure
 # when we do need to reconfigure
-CONFIGURE_INPUTS := "$(CC)$(CFLAGS)$(CPP)$(CPPFLAGS)$(CXX)$(CXXFLAGS)$(AS)$(AR)$(HOST_CC)$(HOST_CXX)$(WASI_SYSROOT)$(CONFIGURE_FLAGS)"
+CONFIGURE_INPUTS := "$(CC)$(CFLAGS)$(CPP)$(CPPFLAGS)$(CXX)$(CXXFLAGS)$(AS)$(AR)$(HOST_CC)$(HOST_CXX)$(HOST_CFLAGS)$(HOST_CXXFLAGS)$(WASI_SYSROOT)$(CONFIGURE_FLAGS)"
 LAST_CONFIGURE_INPUTS := "$(shell cat reconfigure.inputs)"
 maybe-configure:
 	[[ $(JSSRC)/configure -ot $(JSSRC)/configure.in ]] && touch $(JSSRC)/configure || true
@@ -203,6 +237,8 @@ maybe-configure:
 	  CXX="$(CXX)" CXXFLAGS="$(CXXFLAGS)" \
 	  HOST_CC="$(HOST_CC)" \
 	  HOST_CXX="$(HOST_CXX)" \
+	  HOST_CFLAGS="$(HOST_CFLAGS)" \
+	  HOST_CXXFLAGS="$(HOST_CXXFLAGS)" \
 	  WASI_SYSROOT="$(WASI_SYSROOT)" \
 	  AS="$(AS)" AR="$(AR)" \
 	  $(JSSRC)/configure $(strip $(CONFIGURE_FLAGS)) || (cat config.log && exit 1) ; \

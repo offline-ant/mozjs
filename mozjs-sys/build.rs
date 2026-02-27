@@ -163,12 +163,28 @@ fn build_spidermonkey(build_dir: &Path) {
 
     let mut cmd = Command::new(&make);
 
+    // iOS/cargo-makepad builds export simulator/device deployment variables globally.
+    // SpiderMonkey also builds host tools (e.g. nsinstall) that must run on macOS.
+    // If these vars leak into host tool compilation, clang may target iOS for host
+    // binaries, which then fail to execute during the build.
+    if target.contains("apple-ios") {
+        cmd.env_remove("IPHONEOS_DEPLOYMENT_TARGET");
+        cmd.env_remove("IPHONESIMULATOR_DEPLOYMENT_TARGET");
+        cmd.env_remove("SDKROOT");
+    }
+
     // Set key environment variables, such as AR, CC, CXX based on what `cc-rs`
     // would choose.
     for var_base in SM_TARGET_ENV_VARS {
         if let Some(value) = get_cc_rs_env_os(var_base) {
             cmd.env(var_base, value);
         }
+    }
+
+    if target.contains("apple-ios") {
+        let host = env::var("HOST").expect("Cargo should set HOST");
+        cmd.env("HOST_CFLAGS", format!("--target={host}"));
+        cmd.env("HOST_CXXFLAGS", format!("-stdlib=libc++ --target={host}"));
     }
 
     // Tell python to not write bytecode cache files, since this will pollute
