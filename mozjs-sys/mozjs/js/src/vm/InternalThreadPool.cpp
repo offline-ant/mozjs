@@ -19,8 +19,15 @@
 // expect most threads to use much less. On Linux, however, requesting a stack
 // of 2MB or larger risks the kernel allocating an entire 2MB huge page for it
 // on first access, which we do not want. To avoid this possibility, we subtract
-// 2 standard VM page sizes from our default.
+// 2 standard VM page sizes from our default on Linux only.
+// On other platforms (notably iOS/macOS aarch64 with 16KB pages),
+// pthread_attr_setstacksize requires page-aligned sizes, and 2MB is already
+// cleanly aligned to both 4KB and 16KB page boundaries.
+#if defined(__linux__)
 static const uint32_t kDefaultHelperStackSize = 2048 * 1024 - 2 * 4096;
+#else
+static const uint32_t kDefaultHelperStackSize = 2048 * 1024;
+#endif
 
 // TSan enforces a minimum stack size that's just slightly larger than our
 // default helper stack size.  It does this to store blobs of TSan-specific
