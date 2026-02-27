@@ -209,7 +209,7 @@ impl JSEngine {
         }
         let diagnostic = unsafe {
             crate::jsapi::JS::detail::InitWithFailureDiagnostic(
-                cfg!(debug_assertions),
+                cfg!(feature = "debugmozjs"),
                 crate::jsapi::JS::detail::FrontendOnly::No,
             )
         };
