@@ -36,7 +36,7 @@ use crate::glue::{
     GetIdVectorAddress, GetObjectVectorAddress, NewCompileOptions, SliceRootedIdVector,
 };
 use crate::jsapi;
-use crate::jsapi::glue::{DeleteRealmOptions, JS_Init, JS_NewRealmOptions};
+use crate::jsapi::glue::{DeleteRealmOptions, JS_NewRealmOptions};
 use crate::jsapi::js;
 use crate::jsapi::js::frontend::InitialStencilAndDelazifications;
 use crate::jsapi::mozilla::Utf8Unit;
@@ -169,7 +169,7 @@ static ENGINE_STATE: Mutex<EngineState> = Mutex::new(EngineState::Uninitialized)
 pub enum JSEngineError {
     AlreadyInitialized,
     AlreadyShutDown,
-    InitFailed,
+    InitFailed(Option<String>),
 }
 
 /// A handle that must be kept alive in order to create new Runtimes.
@@ -203,13 +203,21 @@ impl JSEngine {
         let mut state = ENGINE_STATE.lock().unwrap();
         match *state {
             EngineState::Initialized => return Err(JSEngineError::AlreadyInitialized),
-            EngineState::InitFailed => return Err(JSEngineError::InitFailed),
+            EngineState::InitFailed => return Err(JSEngineError::InitFailed(None)),
             EngineState::ShutDown => return Err(JSEngineError::AlreadyShutDown),
             EngineState::Uninitialized => (),
         }
-        if unsafe { !JS_Init() } {
+        let diagnostic = unsafe {
+            crate::jsapi::JS::detail::InitWithFailureDiagnostic(
+                cfg!(debug_assertions),
+                crate::jsapi::JS::detail::FrontendOnly::No,
+            )
+        };
+        if !diagnostic.is_null() {
             *state = EngineState::InitFailed;
-            Err(JSEngineError::InitFailed)
+            let msg = unsafe { std::ffi::CStr::from_ptr(diagnostic) };
+            let msg = msg.to_str().ok().map(|s| s.to_owned());
+            Err(JSEngineError::InitFailed(msg))
         } else {
             *state = EngineState::Initialized;
             Ok(JSEngine {
