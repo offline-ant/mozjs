@@ -1,11 +1,11 @@
 [package]
 name = "mozjs"
 description = "Rust bindings to the Mozilla SpiderMonkey JavaScript engine."
-repository.workspace = true
+repository = "https://github.com/servo/mozjs/"
 version = "0.15.2"
 authors = ["The Servo Project Developers"]
-license.workspace = true
-edition.workspace = true
+license = "MPL-2.0"
+edition = "2021"
 
 [lib]
 doctest = false
@@ -24,7 +24,7 @@ crown = ["mozjs_sys/crown"]
 
 [dependencies]
 encoding_rs = "0.8.35"
-libc.workspace = true
+libc = "0.2"
 log = "0.4"
 # When doing non-version changes also update ../mozjs-sys/etc/sm-security-bump.py
 mozjs_sys = { version = "=0.140.7-0", path = "../mozjs-sys" }
@@ -39,8 +39,8 @@ criterion = { version = "0.6", default-features = false, features = [
 criterion = "0.6"
 
 [build-dependencies]
-cc.workspace = true
-bindgen.workspace = true
+cc = "1"
+bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
 
 
 [[bench]]

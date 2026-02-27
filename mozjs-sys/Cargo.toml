@@ -1,13 +1,13 @@
 [package]
 name = "mozjs_sys"
 description = "System crate for the Mozilla SpiderMonkey JavaScript engine."
-repository.workspace = true
+repository = "https://github.com/servo/mozjs/"
 version = "0.140.7-0"
 authors = ["Mozilla", "The Servo Project Developers"]
 links = "mozjs"
-license.workspace = true
+license = "MPL-2.0"
 exclude = ["__pycache__", "/etc/", "/mozjs/.cargo/"]
-edition.workspace = true
+edition = "2021"
 
 [lib]
 name = "mozjs_sys"
@@ -27,7 +27,7 @@ crown = []
 oom_with_hook = []
 
 [dependencies]
-libc.workspace = true
+libc = "0.2"
 encoding_c = "0.9.8"
 encoding_c_mem = "0.2.6"
 # unicode-bidi-ffi = { path = "./mozjs/intl/bidi/rust/unicode-bidi-ffi" }
@@ -49,8 +49,8 @@ libz-sys = { version = "1.1.19", default-features = false, features = [
 ], optional = true }
 
 [build-dependencies]
-bindgen.workspace = true
-cc.workspace = true
+bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
+cc = "1"
 walkdir = "2"
 flate2 = "1"
 tar = "0.4"
