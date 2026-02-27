@@ -207,6 +207,9 @@ impl JSEngine {
             EngineState::ShutDown => return Err(JSEngineError::AlreadyShutDown),
             EngineState::Uninitialized => (),
         }
+        // Mirror the inline JS_InitWithFailureDiagnostic() from
+        // Initialization.h: isDebugBuild must match the C++ DEBUG define,
+        // which mozjs-sys only sets when the debugmozjs feature is enabled.
         let diagnostic = unsafe {
             crate::jsapi::JS::detail::InitWithFailureDiagnostic(
                 cfg!(feature = "debugmozjs"),
