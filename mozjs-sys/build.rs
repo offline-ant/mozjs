@@ -85,6 +85,12 @@ fn main() {
                 archive::download_archive(Some(&archive)).unwrap_or(PathBuf::from(archive));
             // Panic directly since the archive is specified manually.
             archive::decompress_static_lib(&archive, &build_dir).unwrap();
+        } else if let Some(cached) = archive::find_cached_archive(&build_dir) {
+            // Env vars changed but the cached archive from a previous build is still valid.
+            // This is expected when switching between build methods (e.g. mach-havi vs cargo).
+            // Delete .mozjs-cache/ to force a full rebuild from source.
+            println!("cargo:warning=mozjs: using cached archive (env changed but binary is identical): {}", cached.display());
+            archive::decompress_static_lib(&cached, &build_dir).unwrap();
         } else {
             let result = archive::download_archive(None)
                 .and_then(|archive| archive::decompress_static_lib(&archive, &build_dir));
@@ -110,7 +116,10 @@ fn main() {
         build(&build_dir, BuildTarget::JSGlue);
         build_bindings(&build_dir, BuildTarget::JSGlue);
 
-        // If this env variable is set, create the compressed tarball of spidermonkey.
+        // Cache the archive for future builds (env changes, clean rebuilds).
+        archive::cache_archive(&build_dir);
+
+        // If this env variable is set, also create the tarball in the target dir.
         if env::var_os("MOZJS_CREATE_ARCHIVE").is_some() {
             archive::compress_static_lib(&build_dir)
                 .expect("Failed to compress static lib binaries.");
@@ -955,6 +964,43 @@ mod archive {
     use std::{env, fs};
     use tar::Archive;
 
+    /// Directory for caching mozjs archives across builds.
+    /// Located at `<workspace>/.mozjs-cache/`.
+    fn cache_dir(build_dir: &Path) -> Option<PathBuf> {
+        let target_dir = get_cargo_target_dir(build_dir)?;
+        // target_dir is e.g. <workspace>/target — go up one level
+        let workspace = target_dir.parent()?;
+        Some(workspace.join(".mozjs-cache"))
+    }
+
+    /// Check for a cached archive from a previous build.
+    pub(crate) fn find_cached_archive(build_dir: &Path) -> Option<PathBuf> {
+        let dir = cache_dir(build_dir)?;
+        let path = dir.join(archive());
+        if path.is_file() {
+            Some(path)
+        } else {
+            None
+        }
+    }
+
+    /// Save the build artifacts as a cached archive for future builds.
+    pub(crate) fn cache_archive(build_dir: &Path) {
+        let Some(dir) = cache_dir(build_dir) else {
+            println!("cargo:warning=Could not determine cache directory, skipping archive cache.");
+            return;
+        };
+        if let Err(e) = fs::create_dir_all(&dir) {
+            println!("cargo:warning=Failed to create cache dir: {e}");
+            return;
+        }
+        let dest = dir.join(archive());
+        match compress_static_lib_to(build_dir, &dest) {
+            Ok(()) => println!("cargo:warning=Cached mozjs archive: {}", dest.display()),
+            Err(e) => println!("cargo:warning=Failed to cache mozjs archive: {e}"),
+        }
+    }
+
     // Get cargo target directory. There's no env variable for build script yet.
     // See https://github.com/rust-lang/cargo/issues/9661 for more info.
     fn get_cargo_target_dir(build_dir: &Path) -> Option<&Path> {
@@ -968,22 +1014,25 @@ mod archive {
         Some(current)
     }
 
-    /// Compress spidermonkey build into a tarball with necessary static binaries and bindgen wrappers.
+    /// Compress spidermonkey build into a tarball at the default target dir location.
     pub(crate) fn compress_static_lib(build_dir: &Path) -> Result<(), std::io::Error> {
+        let target_dir = get_cargo_target_dir(build_dir).unwrap();
+        let dest = target_dir.join(archive());
+        compress_static_lib_to(build_dir, &dest)
+    }
+
+    /// Compress spidermonkey build into a tarball at the given path.
+    fn compress_static_lib_to(build_dir: &Path, dest: &Path) -> Result<(), std::io::Error> {
         let target = env::var("TARGET").unwrap();
-        let target_dir = get_cargo_target_dir(build_dir).unwrap().display();
-        let tar_gz = File::create(format!("{}/{}", target_dir, archive()))?;
+        let tar_gz = File::create(dest)?;
         let enc = GzEncoder::new(tar_gz, Compression::default());
         let mut tar = tar::Builder::new(enc);
 
         if target.contains("windows") {
-            // This is the static library of spidermonkey.
             tar.append_file(
                 "js/src/build/js_static.lib",
                 &mut File::open(join_path(build_dir, "js/src/build/js_static.lib"))?,
             )?;
-
-            // The bindgen binaries and generated rust files for mozjs.
             tar.append_file(
                 "jsapi.lib",
                 &mut File::open(join_path(build_dir, "jsapi.lib"))?,
@@ -992,7 +1041,6 @@ mod archive {
                 "jsglue.lib",
                 &mut File::open(join_path(build_dir, "jsglue.lib"))?,
             )?;
-
             tar.append_file(
                 "jsapi.rs",
                 &mut File::open(join_path(build_dir, "jsapi.rs"))?,
@@ -1004,9 +1052,6 @@ mod archive {
         } else {
             if env::var_os("CARGO_FEATURE_DEBUGMOZJS").is_none() {
                 let strip_bin = get_cc_rs_env_os("STRIP").unwrap_or_else(|| "strip".into());
-                // Strip symbols from the static binary since it could bump up to 1.6GB on Linux.
-                // TODO: Maybe we could separate symbols for those who still want the debug ability.
-                // https://github.com/GabrielMajeri/separate-symbols
                 let mut strip = Command::new(strip_bin);
                 if !target.contains("apple") {
                     strip.arg("--strip-debug");
@@ -1017,13 +1062,10 @@ mod archive {
                 assert!(status.success());
             }
 
-            // This is the static library of spidermonkey.
             tar.append_file(
                 "js/src/build/libjs_static.a",
                 &mut File::open(join_path(build_dir, "js/src/build/libjs_static.a"))?,
             )?;
-
-            // The bindgen binaries and generated rust files for mozjs.
             tar.append_file(
                 "libjsapi.a",
                 &mut File::open(join_path(build_dir, "libjsapi.a"))?,
@@ -1032,7 +1074,6 @@ mod archive {
                 "libjsglue.a",
                 &mut File::open(join_path(build_dir, "libjsglue.a"))?,
             )?;
-
             tar.append_file(
                 "jsapi.rs",
                 &mut File::open(join_path(build_dir, "jsapi.rs"))?,
