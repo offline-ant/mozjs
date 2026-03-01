@@ -216,7 +216,7 @@ endif
 .PHONY : all maybe-configure
 
 all: maybe-configure
-	$(MAKE) -f Makefile
+	$(MAKE) -j$(NUM_JOBS) -f Makefile
 
 # Only touch and run configure if we need to, to avoid unnecessary rebuilds.
 # The second two time checks handle the case of configure.in and configure having
