@@ -76,28 +76,19 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let build_dir = out_dir.join("build");
 
-    // Check if we can link with pre-built archive, and decide if it needs to build from source.
+    // Try cached archive first, fall back to building from source.
     let mut build_from_source = should_build_from_source();
     if !build_from_source {
         if let Ok(archive) = env::var("MOZJS_ARCHIVE") {
-            // If the archive variable is present, assume it's a URL base to download from.
-            let archive =
-                archive::download_archive(Some(&archive)).unwrap_or(PathBuf::from(archive));
-            // Panic directly since the archive is specified manually.
+            // MOZJS_ARCHIVE points to a local archive path.
+            let archive = PathBuf::from(archive);
             archive::decompress_static_lib(&archive, &build_dir).unwrap();
         } else if let Some(cached) = archive::find_cached_archive(&build_dir) {
-            // Env vars changed but the cached archive from a previous build is still valid.
-            // This is expected when switching between build methods (e.g. mach-havi vs cargo).
-            // Delete .mozjs-cache/ to force a full rebuild from source.
-            println!("cargo:warning=mozjs: using cached archive (env changed but binary is identical): {}", cached.display());
+            println!("cargo:warning=mozjs: using cached archive: {}", cached.display());
             archive::decompress_static_lib(&cached, &build_dir).unwrap();
         } else {
-            let result = archive::download_archive(None)
-                .and_then(|archive| archive::decompress_static_lib(&archive, &build_dir));
-            if let Err(e) = result {
-                println!("cargo:warning=Failed to link pre-built archive by {e}. Building from source instead.");
-                build_from_source = true;
-            }
+            println!("cargo:warning=No cached mozjs archive found. Building from source.");
+            build_from_source = true;
         }
 
         if !build_from_source {
@@ -471,8 +462,8 @@ fn link_bindgen_static_lib_binaries(build_dir: &Path) {
     println!("cargo:rustc-link-lib=static=jsglue");
 }
 
-/// Check env variable conditions to decide if we need to link pre-built archive first.
-/// And then return bool value to notify if we need to build from source instead.
+/// Check env variable conditions to decide if we need to build from source.
+/// Returns true only when explicitly requested. Otherwise tries cached archives first.
 fn should_build_from_source() -> bool {
     if env::var_os("MOZJS_FROM_SOURCE").is_some() {
         println!("Environment variable MOZJS_FROM_SOURCE is set. Building from source directly.");
@@ -481,14 +472,6 @@ fn should_build_from_source() -> bool {
         println!(
             "Environment variable MOZJS_CREATE_ARCHIVE is set. Building from source directly."
         );
-        true
-    } else if env::var_os("MOZJS_ARCHIVE").is_some() {
-        false
-    } else if env::var_os("CARGO_FEATURE_INTL").is_none() {
-        println!("intl feature is disabled. Building from source directly.");
-        true
-    } else if !env::var_os("CARGO_FEATURE_JIT").is_some() {
-        println!("jit feature is NOT enabled. Building from source directly.");
         true
     } else {
         false
@@ -955,12 +938,9 @@ mod archive {
     use flate2::read::GzDecoder;
     use flate2::write::GzEncoder;
     use flate2::Compression;
-    use std::env::VarError;
     use std::fs::File;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::LazyLock;
-    use std::time::Instant;
     use std::{env, fs};
     use tar::Archive;
 
@@ -1116,143 +1096,6 @@ mod archive {
         Ok(())
     }
 
-    static ATTESTATION_AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
-        Command::new("gh")
-            .arg("attestation")
-            .arg("--help")
-            .output()
-            .is_ok_and(|output| output.status.success())
-    });
-
-    enum AttestationType {
-        /// Fallback to compiling from source on failure
-        Lenient,
-        /// Abort the build on failure
-        Strict,
-    }
-
-    enum ArtifactAttestation {
-        /// Do not verify the attestation artifact.
-        Disabled,
-        /// Verify the attestation artifact
-        Enabled(AttestationType),
-    }
-
-    impl ArtifactAttestation {
-        const ENV_VAR_NAME: &'static str = "MOZJS_ATTESTATION";
-
-        fn from_env_str(value: &str) -> Self {
-            match value {
-                "0" | "off" | "false" => ArtifactAttestation::Disabled,
-                "1" | "on" | "true" | "lenient" => {
-                    ArtifactAttestation::Enabled(AttestationType::Lenient)
-                }
-                "2" | "strict" | "force" => ArtifactAttestation::Enabled(AttestationType::Strict),
-                other => {
-                    println!(
-                        "cargo:warning=`{}` set to unsupported value: {other}",
-                        Self::ENV_VAR_NAME
-                    );
-                    ArtifactAttestation::Enabled(AttestationType::Lenient)
-                }
-            }
-        }
-
-        fn from_env() -> Self {
-            match env::var(Self::ENV_VAR_NAME) {
-                Ok(value) => {
-                    let lower = value.to_lowercase();
-                    return Self::from_env_str(&lower);
-                }
-                Err(VarError::NotPresent) => {}
-                Err(VarError::NotUnicode(_)) => {
-                    println!(
-                        "cargo:warning={} value must be valid unicode.",
-                        Self::ENV_VAR_NAME
-                    );
-                }
-            }
-            ArtifactAttestation::Disabled
-        }
-    }
-
-    /// Use GitHub artifact attestation to verify the artifact is not corrupt.
-    fn attest_artifact(kind: AttestationType, archive_path: &Path) -> Result<(), std::io::Error> {
-        let start = Instant::now();
-        if !*ATTESTATION_AVAILABLE {
-            println!(
-                "cargo:warning=Artifact attestation enabled, but not available. \
-                     Please refer to the documentation for available values for {}",
-                ArtifactAttestation::ENV_VAR_NAME
-            );
-        }
-        let mut attestation_cmd = Command::new("gh");
-        attestation_cmd
-            .arg("attestation")
-            .arg("verify")
-            .arg(&archive_path)
-            .arg("-R")
-            .arg("servo/mozjs");
-
-        let attestation_duration = start.elapsed();
-        eprintln!(
-            "Artifact evaluation took {} ms",
-            attestation_duration.as_millis()
-        );
-
-        if let Err(output) = attestation_cmd.output() {
-            println!("cargo:warning=Failed to verify the artifact downloaded from CI: {output:?}");
-            // Remove the file so the build-script will redownload next time.
-            let _ = fs::remove_file(&archive_path).inspect_err(|e| {
-                println!("cargo:warning=Failed to delete archive: {e}");
-            });
-            match kind {
-                AttestationType::Strict => panic!("Artifact verification failed!"),
-                AttestationType::Lenient => {
-                    return Err(std::io::Error::from(std::io::ErrorKind::InvalidData));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Download the SpiderMonkey archive with cURL using the provided base URL. If it's None,
-    /// it will use `servo/mozjs`'s release page as the base URL.
-    pub(crate) fn download_archive(base: Option<&str>) -> Result<PathBuf, std::io::Error> {
-        let base = base.unwrap_or("https://github.com/servo/mozjs/releases");
-        let version = env::var("CARGO_PKG_VERSION").unwrap();
-        let archive_path = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join(&archive());
-
-        if !archive_path.exists() {
-            eprintln!("Trying to download prebuilt mozjs static library from Github Releases");
-            let curl_start = Instant::now();
-            if !Command::new("curl")
-                .arg("-L")
-                .arg("-f")
-                .arg("-s")
-                .arg("-o")
-                .arg(&archive_path)
-                .arg(format!(
-                    "{base}/download/mozjs-sys-v{version}/{}",
-                    archive()
-                ))
-                .status()?
-                .success()
-            {
-                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
-            }
-            eprintln!(
-                "Successfully downloaded mozjs archive in {} ms",
-                curl_start.elapsed().as_millis()
-            );
-            let attestation = ArtifactAttestation::from_env();
-            if let ArtifactAttestation::Enabled(kind) = attestation {
-                attest_artifact(kind, &archive_path)?;
-            }
-        }
-
-        Ok(archive_path)
-    }
 }
 
 /// Joins paths component by component to reduce mixing of `\` and `/` in windows paths.

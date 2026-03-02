@@ -120,11 +120,11 @@ def ndk_version(value, ndk):
     except GetNdkVersionError as e:
         die(str(e))
 
-    if NDK_VERSION != human:
+    # Accept any r28 variant (r28a, r28b, r28c, etc.).
+    if major != "28":
         die(
-            "The only supported version of the NDK is %s (have %s)\n"
-            "Please run |mach bootstrap| "
-            "to install the correct NDK." % (NDK_VERSION, human)
+            "The only supported NDK major version is r28 (have %s)\n"
+            "Please install an r28 NDK." % human
         )
     return namespace(
         major=major,
